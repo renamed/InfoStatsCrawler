@@ -162,10 +162,9 @@ namespace InfoStats
             // reading file row
             currentRow = _readingStream.ReadLine();
 
-
             // when bracesDiff reaches zero braces are balanced, 
             // indicating that the current Bibtex record is over     
-            while (currentRow != null && bracesDiff != 0)
+            while (currentRow != null)
             {
                 // removing new line characters
                 currentRow = currentRow.Replace(Environment.NewLine, string.Empty);
@@ -195,6 +194,9 @@ namespace InfoStats
                 accClosedBraces += currentRow.Count(s => s.Equals('}'));
                 // calculating the difference
                 bracesDiff = accOpenedBraces - accClosedBraces;
+
+                if (bracesDiff == 0)
+                    break;
 
                 // moving forwards
                 currentRow = _readingStream.ReadLine();

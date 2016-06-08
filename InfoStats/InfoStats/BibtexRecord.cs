@@ -14,6 +14,10 @@ namespace InfoStats
         private string _pages;
         private string _year;
 
+        public double ImpactFactor { get; set; }
+        public double Eigenfactor { get; set; }
+        public double InfluenceScore { get; set; }
+
         public int InitialPage { get; private set; }
         public int EndPage { get; private set; }
         public int Published { get; private set; }
@@ -32,9 +36,10 @@ namespace InfoStats
         public string ISSN { get; set; }
         public string Month { get; set; }
         public string KeyWords { get; set; }
+        public string IdConference { get; set; }
 
         public string Country { get; set; }
-        public int CitationCount { get; set; }
+        public int CitationsCount { get; set; }
         public int Visualizations { get; set; }
 
 

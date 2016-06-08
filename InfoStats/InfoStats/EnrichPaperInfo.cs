@@ -3,6 +3,7 @@ using OpenQA.Selenium;
 using OpenQA.Selenium.PhantomJS;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -18,7 +19,11 @@ namespace InfoStats
         /// <summary>
         /// The base URL for web page cover for a paper in IEEE
         /// </summary>
-        public static readonly string BaseUrl = @"http://ieeexplore.ieee.org/xpl/articleDetails.jsp?arnumber={0}";
+        public static readonly string PaperaBaseUrl = @"http://ieeexplore.ieee.org/xpl/articleDetails.jsp?arnumber={0}";
+        /// <summary>
+        /// The base URL for web page cover for a conference in IEEE
+        /// </summary>
+        public static readonly string ConferenceBaseUrl = @"http://ieeexplore.ieee.org/xpl/RecentIssue.jsp?punumber={0}";
 
         /// <summary>
         /// Crawls and retrives information from the IEEE cover web page for papers
@@ -33,11 +38,9 @@ namespace InfoStats
             // sanity check
             if (string.IsNullOrWhiteSpace(bibtexRecord.Id))
                 throw new ArgumentNullException();
-
-            // creating crawling URL
-            string url = string.Format(BaseUrl, bibtexRecord.Id);
+                        
             // retrieving HTML page
-            string pageHtml = GetPageHTML(url);
+            string pageHtml = GetPaperCoverPage(bibtexRecord.Id);
             // completing BibtexRecord object
             RetrieveInfoFromHtml(pageHtml, bibtexRecord);
         }
@@ -64,9 +67,89 @@ namespace InfoStats
             // sanity check
             if (htmlDoc.DocumentNode != null)
             {
+                // retrieving conference identifier
+                GetPublishedInDiv(htmlDoc, bibtexRecord);
+
+                // if identifier has been found successfuly, 
+                // we start a thread to discover the conference impact factor
+                // in the meantime, we obtain the other properties whose
+                // HTML is already loaded.
+                Thread threadImpactFactor = null;
+                if (!string.IsNullOrWhiteSpace(bibtexRecord.IdConference))
+                {
+                    threadImpactFactor = new Thread(() => GetImpactFactor(bibtexRecord));
+                    threadImpactFactor.Start();
+                }
+
+                // retrieving country
                 SetCountry(htmlDoc, bibtexRecord);
+                // retrieving number of citations
                 SetCitations(htmlDoc, bibtexRecord);
+                // retrieving number of visualizations
                 SetVisualizations(htmlDoc, bibtexRecord);
+
+                // waiting for impact factor thread in case 
+                // it didn't finish yet
+                if (threadImpactFactor != null)
+                    threadImpactFactor.Join();
+            }
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="bibtexRecord"></param>
+        private void GetImpactFactor(BibtexRecord bibtexRecord)
+        {
+            string pageHtml = GetConferenceCoverPage(bibtexRecord.IdConference);
+
+            // the HTML document 
+            HtmlDocument htmlDoc = new HtmlDocument();
+
+            // default option to fix easy HTML mistakes
+            htmlDoc.OptionFixNestedTags = true;
+            // structuring the HTML document
+            htmlDoc.LoadHtml(pageHtml);
+
+            // sanity check
+            if (htmlDoc.DocumentNode != null)
+            {
+                double auxResults;
+                // Impact factor node
+                HtmlNode impactFactorNode = htmlDoc.DocumentNode.SelectSingleNode("//*[@id='journal-page-bdy']/div[1]/div[2]/a[1]/span[1]");
+                
+                // sanity check
+                if (impactFactorNode != null)
+                {
+                    double.TryParse(impactFactorNode.InnerText, NumberStyles.Any, CultureInfo.GetCultureInfo("en-US"), out auxResults);
+                    bibtexRecord.ImpactFactor = auxResults;
+                }
+                impactFactorNode = null;
+
+                // Eigenfactor node
+                auxResults = 0;
+
+                HtmlNode eigenfactorNode = htmlDoc.DocumentNode.SelectSingleNode("//*[@id='journal-page-bdy']/div[1]/div[2]/a[2]/span[1]");
+                // sanity check
+                if (eigenfactorNode != null)
+                {
+                    double.TryParse(eigenfactorNode.InnerText, NumberStyles.Any, CultureInfo.GetCultureInfo("en-US"), out auxResults);
+                    bibtexRecord.Eigenfactor = auxResults;
+                }
+                eigenfactorNode = null;
+
+
+                // Article Influence Score node
+                auxResults = 0;
+
+                HtmlNode articleInfluenceScoreNode = htmlDoc.DocumentNode.SelectSingleNode("//*[@id='journal-page-bdy']/div[1]/div[2]/a[3]/span[1]");
+                // sanity check
+                if (articleInfluenceScoreNode != null)
+                {
+                    double.TryParse(articleInfluenceScoreNode.InnerText, NumberStyles.Any, CultureInfo.GetCultureInfo("en-US"), out auxResults);
+                    bibtexRecord.InfluenceScore = auxResults;
+                }
+                articleInfluenceScoreNode = null;
             }
         }
 
@@ -94,6 +177,38 @@ namespace InfoStats
                 }
             }
             stats.Visualizations = visualizations;
+        }
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="htmlDoc"></param>
+        /// <returns></returns>
+        private void GetPublishedInDiv(HtmlDocument htmlDoc, BibtexRecord stats)
+        {
+            // retrieving HTML element
+            HtmlNode link = htmlDoc.DocumentNode.SelectSingleNode("//*[@id='articleDetails']/div/div[2]/a[1]/@href");
+            // sanity check
+            if (link != null)
+            {
+                // retrieving the 'href' property from the retrieved element
+                string linkHref = link.GetAttributeValue("href", null);
+                // sanity check
+                if (!string.IsNullOrWhiteSpace(linkHref))
+                {
+                    // splitting the URL so we can get the parameter
+                    // we cannot use the 'Uri' and 'HttpUtility' because they do not work with relative paths
+                    string[] splitTokens = linkHref.Split(new string[] { "punumber=" }, StringSplitOptions.RemoveEmptyEntries);
+                    // sanity check
+                    if (splitTokens != null && splitTokens.Length > 1)
+                    {
+                        // retrieving the second part of the split
+                        string idPage = splitTokens[1];
+                        // if it's all made of numeric digits we set it to the proper object
+                        if (idPage.All(char.IsDigit))
+                            stats.IdConference = idPage;
+                    }
+                }
+            }
         }
 
         /// <summary>
@@ -151,7 +266,7 @@ namespace InfoStats
                 }
             }
             // setting the value to the object
-            stats.CitationCount = citations;
+            stats.CitationsCount = citations;
         }
 
         /// <summary>
@@ -160,26 +275,51 @@ namespace InfoStats
         /// </summary>
         /// <param name="url"></param>
         /// <returns></returns>
-        private string GetPageHTML(string url)
+        private string GetPaperCoverPage(string idUrl)
         {
+            // creating crawling URL
+            string url = string.Format(PaperaBaseUrl, idUrl);
             // code based on
             // http://www.seleniumhq.org/docs/03_webdriver.jsp#how-does-webdriver-drive-the-browser-compared-to-selenium-rc
-            using (IWebDriver driver = new PhantomJSDriver())
+            using (PhantomJSDriverService driverService = PhantomJSDriverService.CreateDefaultService())
             {
-                // going to the URL
-                driver.Navigate().GoToUrl(url);
-                // sleeping to avoid IP blocking
-                Thread.Sleep(2 * 1000);
-                // clicking on the element to retrieve the statistics
-                driver.FindElement(By.Id("abstract-citedby-tab")).Click();
-                // sleeping so page can be rendered completly
-                Thread.Sleep(2 * 1000);
-                // clicking on the element to retrieve the statistics
-                driver.FindElement(By.Id("abstract-metrics-tab")).Click();
-                // sleeping so page can be fully rendered 
-                Thread.Sleep(2 * 1000);
-                // returning its HTML
-                return driver.PageSource;
+                driverService.HideCommandPromptWindow = true;
+                using (IWebDriver driver = new PhantomJSDriver(driverService, new PhantomJSOptions(), TimeSpan.FromMinutes(2)))
+                {
+                    // going to the URL
+                    driver.Navigate().GoToUrl(url);
+                    // sleeping to avoid IP blocking
+                    Thread.Sleep(2 * 1000);
+                    // clicking on the element to retrieve the statistics
+                    driver.FindElement(By.Id("abstract-citedby-tab")).Click();
+                    // sleeping so page can be rendered completly
+                    Thread.Sleep(2 * 1000);
+                    // clicking on the element to retrieve the statistics
+                    driver.FindElement(By.Id("abstract-metrics-tab")).Click();
+                    // sleeping so page can be fully rendered 
+                    Thread.Sleep(2 * 1000);
+                    // returning its HTML
+                    return driver.PageSource;
+                }
+            }            
+        }
+        /// <summary>
+        /// Gets the HTML source of the conference cover web page
+        /// </summary>
+        /// <param name="conferenceId"></param>
+        /// <returns></returns>
+        private string GetConferenceCoverPage(string conferenceId)
+        {
+            // creating crawling URL
+            string url = string.Format(ConferenceBaseUrl, conferenceId);
+            using (PhantomJSDriverService driverService = PhantomJSDriverService.CreateDefaultService())
+            {
+                driverService.HideCommandPromptWindow = true;
+                using (IWebDriver driver = new PhantomJSDriver(driverService, new PhantomJSOptions(), TimeSpan.FromMinutes(2)))
+                {
+                    driver.Navigate().GoToUrl(url);
+                    return driver.PageSource;
+                }
             }
         }
     }

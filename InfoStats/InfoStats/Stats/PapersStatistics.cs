@@ -61,7 +61,7 @@ namespace InfoStats.Stats
             return papersByYear;
         }
         /// <summary>
-        /// Citations / Total citations by year
+        /// Average and stardand deviation of impact factor by year
         /// </summary>
         public List<PapersByYearAvgStdByYear> GetCitationByOverallCitationsInYear()
         {
@@ -71,32 +71,77 @@ namespace InfoStats.Stats
             // avg and std dev of papers by year
             List<PapersByYearAvgStdByYear> papersByYearAvgStdByYear = new List<PapersByYearAvgStdByYear>();
 
-            // we may have few unique years.
-            for (int i = 3; i < uniqueYears.Count; i++)
+            // going through each year
+            foreach(string currentYear in uniqueYears)
             {
-                // calculating total citations of 3 years ago
-                int totalCitations3 = _thePapers.Where(k => k.Year.Equals(uniqueYears[i - 3])).Sum(k => k.CitationCount);
-                int totalCitations2 = _thePapers.Where(k => k.Year.Equals(uniqueYears[i - 2])).Sum(k => k.CitationCount);
-                int totalCitations1 = _thePapers.Where(k => k.Year.Equals(uniqueYears[i - 1])).Sum(k => k.CitationCount);
-
-                // summing all 3 years total citations
-                int totalCitationsLast3Years = totalCitations3 + totalCitations2 + totalCitations1;
-
-                // calculating citation metrics for this particular year
-                List<double> allCitationsInYear = _thePapers.Where(k => k.Year.Equals(uniqueYears[i])).Select(k => 1.0 * k.CitationCount / totalCitationsLast3Years).ToList();
-
-                // calculating the year's statistics
-                PapersByYearAvgStdByYear currentPapersByYearAvgStdByYear = new PapersByYearAvgStdByYear();
-                currentPapersByYearAvgStdByYear.Year   = uniqueYears[i];
-                currentPapersByYearAvgStdByYear.Avg    = allCitationsInYear.Average();
-                currentPapersByYearAvgStdByYear.StdDev = allCitationsInYear.StdDev();
-
-                // adding in the returning object
-                papersByYearAvgStdByYear.Add(currentPapersByYearAvgStdByYear);
+                // retrieving results from a particular year whose impact factor is greater than zero
+                IEnumerable<double> impactFactor = _thePapers.Where(i => i.Year.Equals(currentYear) && i.ImpactFactor > 0).Select(i => i.ImpactFactor);
+                // adding object to the list
+                papersByYearAvgStdByYear.Add(new PapersByYearAvgStdByYear()
+                {
+                    Year   = currentYear,
+                    Avg    = impactFactor.Count() > 0 ? impactFactor.Average() : 0,
+                    StdDev = impactFactor.Count() > 0 ? impactFactor.StdDev()  : 0
+                });
             }
-
             // go!
-            return papersByYearAvgStdByYear;
+            return papersByYearAvgStdByYear.OrderBy(i => i.Year).ToList();
+        }
+
+        /// <summary>
+        /// Average and stardand deviation of citations by year
+        /// </summary>
+        public List<PapersByYearAvgStdByYear> GetAvgCitationsByYear()
+        {
+            // getting the distinct years of the records
+            List<string> uniqueYears = _thePapers.Select(i => i.Year).Distinct().ToList();
+
+            // avg and std dev of papers by year
+            List<PapersByYearAvgStdByYear> papersByYearAvgStdByYear = new List<PapersByYearAvgStdByYear>();
+
+            // going through each year
+            foreach (string currentYear in uniqueYears)
+            {
+                // retrieving results from a particular year whose impact factor is greater than zero
+                IEnumerable<int> citationCount = _thePapers.Where(i => i.Year.Equals(currentYear) && i.CitationsCount > 0).Select(i => i.CitationsCount);
+                // adding object to the list
+                papersByYearAvgStdByYear.Add(new PapersByYearAvgStdByYear()
+                {
+                    Year   = currentYear,
+                    Avg    = citationCount.Count() > 0 ? citationCount.Average() : 0,
+                    StdDev = citationCount.Count() > 0 ? citationCount.StdDev()  : 0
+                });
+            }
+            // go!
+            return papersByYearAvgStdByYear.OrderBy(i => i.Year).ToList();
+        }
+
+        /// <summary>
+        /// Average and stardand deviation of citations by year
+        /// </summary>
+        public List<PapersByYearAvgStdByYear> GetAvgVisualizationsByYear()
+        {
+            // getting the distinct years of the records
+            List<string> uniqueYears = _thePapers.Select(i => i.Year).Distinct().ToList();
+
+            // avg and std dev of papers by year
+            List<PapersByYearAvgStdByYear> papersByYearAvgStdByYear = new List<PapersByYearAvgStdByYear>();
+
+            // going through each year
+            foreach (string currentYear in uniqueYears)
+            {
+                // retrieving results from a particular year whose impact factor is greater than zero
+                IEnumerable<int> visualizations = _thePapers.Where(i => i.Year.Equals(currentYear) && i.Visualizations > 0).Select(i => i.Visualizations);
+                // adding object to the list
+                papersByYearAvgStdByYear.Add(new PapersByYearAvgStdByYear()
+                {
+                    Year   = currentYear,
+                    Avg    = visualizations.Count() > 0 ? visualizations.Average() : 0,
+                    StdDev = visualizations.Count() > 0 ? visualizations.StdDev()  : 0
+                });
+            }
+            // go!
+            return papersByYearAvgStdByYear.OrderBy(i => i.Year).ToList();
         }
 
         /// <summary>
@@ -223,6 +268,27 @@ namespace InfoStats.Stats
             // go!
             return aboveStdDev;
         } 
+
+        public List<KeyValuePair<string, int>> GetPapersByMonth(string year, string country = null)
+        {
+            Dictionary<string, int> countByMonth = new Dictionary<string, int>();
+            IEnumerable<BibtexRecord> papersFiltered = null;
+
+            if (country == null)
+                papersFiltered = _thePapers.Where(i => i.Year.Equals(year));
+            else
+                papersFiltered = _thePapers.Where(i =>  i.Year.Equals(year) && i.Country.Equals(country));
+            
+
+            foreach (BibtexRecord currentBibtex in papersFiltered)
+            {
+                if (!countByMonth.ContainsKey(currentBibtex.Month))
+                    countByMonth[currentBibtex.Month] = 1;
+                else
+                    countByMonth[currentBibtex.Month]++;
+            }
+            return countByMonth.ToList();
+        }
 
         /// <summary>
         /// Calculates and returns the countries with the largest number of publishings

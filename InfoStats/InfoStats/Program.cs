@@ -1,8 +1,10 @@
-﻿using InfoStats.Stats;
+﻿using InfoStats.Db;
+using InfoStats.Stats;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -15,23 +17,33 @@ namespace InfoStats
     {
         static void Main(string[] args)
         {
-            // what we should do
-            string phase = ConfigurationManager.AppSettings["Phase"];
-
-            // sanity check
-            if (string.IsNullOrWhiteSpace(phase))
+            try
             {
-                Console.WriteLine("There is no Phase value in App.config");
-                return;
-            }
+                // what we should do
+                string phase = ConfigurationManager.AppSettings["Phase"];
 
-            // checking if we should enrich or do some statistics
-            if (phase.Equals("1"))
-                Phase1();
-            else if (phase.Equals("2"))
-                Phase2();
-            else
-                throw new ArgumentOutOfRangeException("Phase values must be 1 (for enriching) and 2 (for statistics)");
+                // sanity check
+                if (string.IsNullOrWhiteSpace(phase))
+                {
+                    Console.WriteLine("There is no Phase value in App.config");
+                    return;
+                }
+
+                // checking if we should enrich or do some statistics
+                if (phase.Equals("1"))
+                    Phase1();
+                else if (phase.Equals("2"))
+                    Phase2();
+                else
+                    throw new ArgumentOutOfRangeException("Phase values must be 1 (for enriching) and 2 (for statistics)");
+            }
+            catch (Exception err)
+            {
+                if (err != null)
+                    Console.WriteLine(err.Message);
+                else
+                    Console.WriteLine("An error has occurred");
+            }
         }
 
         /// <summary>
@@ -75,25 +87,41 @@ namespace InfoStats
                         List<BibtexRecord> currentBlock = bibtex.ReadBibtexFile(blockSize);
 
                         // visiting two web pages at once
-                        Parallel.ForEach(
-                            currentBlock,
-                            new ParallelOptions() { MaxDegreeOfParallelism = 4 },
-                            currentBibtex =>
+
+                        int total = currentBlock.Count;
+                        int qtd = 0;
+                        object locked = new object();
+                        Parallel.For(0, total, new ParallelOptions() { MaxDegreeOfParallelism = 2 }, (i) =>
+                        {                            
+                            try
                             {
-                                try
-                                {
-                                    // crawling the IEEE web page and collecting more info about the papers
-                                    EnrichPaperInfo enrichPaperInfo = new EnrichPaperInfo();
-                                    enrichPaperInfo.EnrichObjectInfo(currentBibtex);
-                                }
-                                catch (Exception err)
-                                {
-                                    Console.WriteLine(err.Message);
-                                }
-                            });
+                                BibtexRecord currentBibtex = currentBlock[i];
 
+                                int seed = DateTime.Now.Millisecond * Guid.NewGuid().GetHashCode();
+                                Random r = new Random(seed);
+
+                                int sleepTime = r.Next(200, 600);
+                                Thread.Sleep(sleepTime);
+
+                                // crawling the IEEE web page and collecting more info about the papers
+                                EnrichPaperInfo enrichPaperInfo = new EnrichPaperInfo();
+                                enrichPaperInfo.EnrichObjectInfo(currentBibtex);
+                            }
+                            catch (Exception err)
+                            {
+                                Console.WriteLine(err.Message);
+                            }
+                            finally
+                            {
+                                lock (locked) { qtd++; }
+                                if (qtd % 100 == 0)
+                                {
+                                    Console.WriteLine("\n\t Feito: {0} de {1} - {2:0.00} % \n", qtd, total, ((1.0 * qtd / total) * 100));
+                                }
+                            }
+                        });
+                            
                         allRecords.AddRange(currentBlock);
-
                     }
                 }
 
@@ -106,6 +134,14 @@ namespace InfoStats
         }
 
         /// <summary>
+        /// Phase 2 takes the Json response from Phase 1 and stores in a database
+        /// </summary>
+        /*static void Phase2()
+        {
+
+        }*/
+
+        /// <summary>
         /// Phase 2 is responsible for calculating statistics from the Phase 1 result
         /// <seealso cref="Phase1()"/>
         /// </summary>
@@ -113,13 +149,18 @@ namespace InfoStats
         {
             try
             {
+                CultureInfo.DefaultThreadCurrentCulture = CultureInfo.GetCultureInfo("en-US");
+
                 // retrieving json file path
-                string jsonFile = ConfigurationManager.AppSettings["JsonFilePath"];
+                //string jsonFile = ConfigurationManager.AppSettings["JsonFilePath"];
+
+                // location where the statistics will be saved
+                string statisticsResult = ConfigurationManager.AppSettings["StatisticsResult"];
 
                 // sanity check
-                if (string.IsNullOrWhiteSpace(jsonFile))
+                if (string.IsNullOrWhiteSpace(statisticsResult))
                     throw new ArgumentNullException();
-
+                /*
                 // reading the record file
                 List<BibtexRecord> paperRecords = JsonConvert.DeserializeObject<List<BibtexRecord>>(File.ReadAllText(jsonFile));
 
@@ -130,22 +171,113 @@ namespace InfoStats
                     i =>
                     {
                         if (string.IsNullOrWhiteSpace(paperRecords[i].Country))
-                            paperRecords[i].Country = "Não Especificado";
+                            paperRecords[i].Country = "Not Specified";
                         if (string.IsNullOrWhiteSpace(paperRecords[i].Year))
-                            paperRecords[i].Year = "Não Especificado";
+                            paperRecords[i].Year = "Not Specified";
                     });
-                            
+                    */
 
+                //DbAccess dbAccess = new DbAccess();
+                //dbAccess.Insert(paperRecords);
+
+                DbAccess dbAccess = new DbAccess();
+                List<BibtexRecord> paperRecords = dbAccess.GetAllRecords();
 
                 PapersStatistics stats = new PapersStatistics(paperRecords);
-                //stats.CountPapersByYear();
-                //stats.GetCitationByOverallCitationsInYear();
-                //stats.CountDistinctCountriesByYear();
-                //stats.GetStepsFromStdDevByCountry(10, 3);
-                stats.GetCountriesWithMostPublishing(10, 3);
-                stats.GetStats(10, 3);
-                var abc = stats.CountKeywords(100, 3);
-                abc.ToList();
+                using (StreamWriter sw = new StreamWriter(statisticsResult, false))
+                {
+                    // number of papers by year
+                    foreach (GroupByCountResult currentRecord in stats.CountPapersByYear())
+                    {
+                        sw.WriteLine("{0};{1}", currentRecord.Grouping, currentRecord.Count);
+                    }
+
+                    // avg and stddev of impact factor by year
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (PapersByYearAvgStdByYear currentRecord in stats.GetCitationByOverallCitationsInYear())
+                    {
+                        sw.WriteLine("{0};{1};{2}", currentRecord.Year, currentRecord.Avg, currentRecord.StdDev);
+                    }
+
+                    // avg and stddev of citations by year
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (PapersByYearAvgStdByYear currentRecord in stats.GetAvgCitationsByYear())
+                    {
+                        sw.WriteLine("{0};{1};{2}", currentRecord.Year, currentRecord.Avg, currentRecord.StdDev);
+                    }
+
+                    // avg and stddev of visualizations by year
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (PapersByYearAvgStdByYear currentRecord in stats.GetAvgVisualizationsByYear())
+                    {
+                        sw.WriteLine("{0};{1};{2}", currentRecord.Year, currentRecord.Avg, currentRecord.StdDev);
+                    }
+
+
+                    // avg and stddev of visualizations by year
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (GroupByCountResult currentRecord in stats.CountDistinctCountriesByYear())
+                    {
+                        sw.WriteLine("{0};{1}", currentRecord.Grouping, currentRecord.Count);
+                    }
+
+                    // steps from std dev
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (GroupByCountResult currentRecord in stats.GetStepsFromStdDevByCountry(20, 3))
+                    {
+                        sw.WriteLine("{0};{1}", currentRecord.Grouping, currentRecord.Count);
+                    }
+
+                    // countries wth most publishing
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.GetCountriesWithMostPublishing(10, 3))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+
+                    // countries statistics
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (CountryStats currentRecord in stats.GetStats(10, 3))
+                    {
+                        sw.WriteLine(string.Format("{0};{1};{2};{3};{4};{5};{6};{7};{8}", currentRecord.Country, currentRecord.Avg, currentRecord.StdDev, currentRecord.Var, currentRecord.HighestValue, currentRecord.LowestValue, currentRecord.MedianPoint, currentRecord.Mean, currentRecord.Mode));
+                    }
+
+                    // keywords count
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.CountKeywords(100, 3))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+
+                    // Papers by month in 2015
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.GetPapersByMonth("2015"))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+
+                    // Papers by month in 2016
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.GetPapersByMonth("2016"))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+
+                    // China papers by month in 2015
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.GetPapersByMonth("2015", "China"))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+
+                    // Papers by month in 2016
+                    sw.WriteLine(Environment.NewLine);
+                    foreach (KeyValuePair<string, int> currentRecord in stats.GetPapersByMonth("2016", "China"))
+                    {
+                        sw.WriteLine(string.Format("{0};{1}", currentRecord.Key, currentRecord.Value));
+                    }
+                    
+                }
             }
             catch (Exception err)
             {
