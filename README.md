@@ -1,2 +1,2 @@
 # InfoStatsCrawler
-A crawler and data collector designed to enrich information to a PhD work.
+A crawler and data collector designed to enrich information to a PhD assignment.
